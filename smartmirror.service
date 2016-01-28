@@ -1,0 +1,15 @@
+[Unit]
+Description=Node.JS SmartMirror Application
+After=xdk-daemon.service
+Requires=xdk-daemon.service
+
+[Service]
+TimeoutStartSec=10
+ExecStart=/usr/bin/node /home/root/IoT_SmartMirror/smartmirror.js
+Environment="NODE_PATH=/usr/lib/node_modules/:/usr/local/lib/node_modules/"
+Environment="NODE_ENV=production"
+Environment="AVAHI_COMPAT_NOWARN=1"
+Environment="HOME=/home/root"
+
+[Install]
+WantedBy=multi-user.target

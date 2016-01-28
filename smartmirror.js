@@ -54,13 +54,16 @@ var parseXML = require('xml2js').parseString;
 var ili9341 = require('jsupm_ili9341');
 var apds9960 = require('jsupm_apds9960');
 
+// LCD object with MRAA named pins
+var lcd = new ili9341.ILI9341(31, 38, 20, 14);
+
 // Parameters
-var DEBUG = 0;
+var DEBUG = 1;
 var OPENWEATHER_API_KEY = "74437411d57c5685298a96fe01ea98a8";
 var LATITUDE = 40.015;
 var LONGITUDE = -105.27;
 var UNITS = "imperial";
-var TEXT_COLOR = ili9341.ILI9341_BLUE;
+var TEXT_COLOR = lcd.color565(0, 255, 255);
 var LIGHT_THRESHOLD_HIGH = 2000;// Amount of light needed to start LCD
 var LIGHT_THRESHOLD_LOW = 1500; // Amount of light needed to go to "sleep"
 var WAIT_WEATHER = 20000;       // Amount of time (ms) between weather updates
@@ -69,9 +72,6 @@ var STATE_CURRENT = 0;          // Looking for current weather
 var STATE_HOURLY = 1;           // Get hourly forecast
 var STATE_DAILY = 2;            // Get 3 day forecast
 var STATE_SLEEP = 4;            // LCD off, not updating weather
-
-// LCD object with MRAA named pins
-var lcd = new ili9341.ILI9341(31, 38, 20, 14);
 
 // Gesture sensor object using I2C bus 1
 var gs = new apds9960.APDS9960(1);
@@ -218,7 +218,7 @@ function updateLCD(str) {
         if (DEBUG >= 2) {
             console.log("LCD: Writing time");
         }
-        lcd.setTextColor(ili9341.ILI9341_CYAN);
+        lcd.setTextColor(TEXT_COLOR);
         lcd.print(timeStr);   
     }
     
@@ -236,7 +236,7 @@ function updateLCD(str) {
         if (DEBUG >= 2) {
             console.log("LCD: Writing string");
         }
-        lcd.setTextColor(ili9341.ILI9341_CYAN);
+        lcd.setTextColor(TEXT_COLOR);
         lcd.print(str);
     }
         
@@ -510,7 +510,7 @@ if (gs.enableGestureSensor(false)) {
 }
 
 // Clear LCD and wait for light. Start polling weather.
-if (DEBUG === 0) {
+if (DEBUG <= 1) {
     lcd.fillScreen(ili9341.ILI9341_BLACK);
 }
 updateWeather();
