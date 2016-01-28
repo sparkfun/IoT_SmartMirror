@@ -77,7 +77,7 @@ var lcd = new ili9341.ILI9341(31, 38, 20, 14);
 var gs = new apds9960.APDS9960(1);
 
 // State of the weather app
-var state = STATE_SLEEP;
+var state = STATE_CURRENT;
 
 // Currently executing threads
 var sensorThread = null;
@@ -91,80 +91,45 @@ var lcdString = null;
 // Functions
 ///////////////////////////////////////////////////////////////////////////////
 
-// Read and return the ambient light value in the room
-function readLight() {
-    var lightVal = gs.readAmbientLight();
-    if (DEBUG === 1) {
-        console.log("Light: " + lightVal);
-    }
-    return lightVal;
-}
-
-// Shut down LCD and wait for light
-function waitForLight() {
-
-    // Make sure gesture sensing is disabled
-    if (!gs.disableGestureSensor()) {
-        console.log("Something went wrong during gesture disable!");
-    }
-
-    // Clear LCD
-    if (DEBUG === 0) {
-        lcd.fillScreen(ili9341.ILI9341_BLACK);
-    }
+// Convert give time to 12 hour format (AM/PM)
+function convertTime(datetime) {
     
-    // Look for light
-    sensorThread = setInterval(function() {
-        if (readLight() >= LIGHT_THRESHOLD_HIGH) {
-            if (DEBUG === 1) {
-                console.log("Light found! Starting weather...");
-            }
-            clearInterval(sensorThread);
-            state = STATE_CURRENT;
-            updateWeather();
-            checkGestureAndLight();
-        }
-    }, 500);
+    // Convert to 12-hour clock
+    var hours = datetime.getHours();
+    var ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    
+    // Append a 0 to minutes less than 10
+    var minutes = datetime.getMinutes();
+    minutes = minutes < 10 ? "0" + minutes : minutes;
+    
+    // Construct string
+    var timeStr = hours + ":" + minutes + " " + ampm;
+    return timeStr;
 }
 
-// Look for a gesture or for lights to go out
-function checkGestureAndLight() {
-
-    // Initialize gesture sensing (no interrupts)
-    if (!gs.enableGestureSensor(false)) {
-        console.log("Something went wrong during gesture init!");
-    }
+// Look for a gesture
+function checkGesture() {
 
     // Check for no light and new gestures
     sensorThread = setInterval(function() {
-        
-        // Check for lights out
-        if (readLight() <= LIGHT_THRESHOLD_LOW) {
-            if (DEBUG === 1) {
-                console.log("Lights out. Goodnight.");
-            }
-            clearInterval(sensorThread);
-            state = STATE_SLEEP;
-            waitForLight();
-        }
-        
+
         // Check for gestures and update state if gesture found
         if (gs.isGestureAvailable()) {
             switch(gs.readGesture()) {
                 case apds9960.DIR_LEFT:
-                    state = (state - 1) % 3;
-                    if (DEBUG === 1) {
+                    state = (state + 5) % 3;
+                    if (DEBUG >= 1) {
                         console.log("LEFT gesture. Now state " + state);
                     }
-                    clearInterval(weatherThread);
                     updateWeather();
                     break;
                 case apds9960.DIR_RIGHT:
                     state = (state + 1) % 3;
-                    if (DEBUG === 1) {
+                    if (DEBUG >= 1) {
                         console.log("RIGHT gesture. Now state " + state);
                     }
-                    clearInterval(weatherThread);
                     updateWeather();
                     break;
                 default:
@@ -178,13 +143,7 @@ function checkGestureAndLight() {
 function updateLCD(str) {
     
     // Get time
-    var currentTime = new Date();
-    var hours = currentTime.getHours();
-    var minutes = currentTime.getMinutes();
-    if (minutes < 10) {
-        minutes = "0" + minutes;
-    }
-    var timeStr = hours + ":" + minutes;
+    timeStr = convertTime(new Date());
     
     // Skip if time is the same
     if (timeStr !== lcdTime) {
@@ -198,7 +157,7 @@ function updateLCD(str) {
         if (lcdTime !== null) {
             lcd.setCursor(0, 10);
             lcd.setTextColor(ili9341.ILI9341_BLACK);
-            if (DEBUG === 1) {
+            if (DEBUG >= 2) {
                 console.log("LCD: Clearing time");
             }
             lcd.print(lcdTime);
@@ -206,7 +165,7 @@ function updateLCD(str) {
     
         // Write new time
         lcd.setCursor(0, 10);
-        if (DEBUG === 1) {
+        if (DEBUG >= 2) {
             console.log("LCD: Writing time");
         }
         lcd.setTextColor(ili9341.ILI9341_CYAN);
@@ -222,15 +181,15 @@ function updateLCD(str) {
             lcd.setCursor(0, 50);
             lcd.setTextColor(ili9341.ILI9341_BLACK);
             lcd.print(lcdString);
-            if (DEBUG === 1) {
+            if (DEBUG >= 2) {
                 console.log("LCD: Clearing string");
             }
         }
     
         // Write new text
         lcd.setCursor(0, 50);
-        if (DEBUG === 1) {
-            console.log("LCD: " + str);
+        if (DEBUG >= 2) {
+            console.log("LCD: Writing string");
         }
         lcd.setTextColor(ili9341.ILI9341_CYAN);
         lcd.print(str);
@@ -240,7 +199,7 @@ function updateLCD(str) {
     lcdString = str;
 }    
 
-// A function to make a request to the OpenWeatherMap API
+// A function to make a request to the OpenWeatherMap API for current weather
 function getWeather() {
 
     // Construct API call to OpenWeatherMap
@@ -303,7 +262,7 @@ function getWeather() {
                         maxTemp = Math.round(maxTemp * 10) / 10;
                         
                         // Print the information for debugging
-                        if (DEBUG === 1) {
+                        if (DEBUG >= 2) {
                             console.log(city);
                             console.log(temperature + tempUnits);
                             console.log(description);
@@ -344,11 +303,137 @@ function getWeather() {
     });
 }
 
+// A function to make a request to the OpenWeatherMap API for hourly forecast
+function getHourly() {
+
+    // Construct API call to OpenWeatherMap
+    var owmReq = "http://api.openweathermap.org/data/2.5/forecast?" +
+                    "lat=" + LATITUDE + "&lon=" + LONGITUDE +
+                    "&appid=" + OPENWEATHER_API_KEY + "&units=" + UNITS +
+                    "&mode=xml";
+
+    // Make the request
+    var request = http.get(owmReq, function(response) {
+
+        // Where we store the response text
+        var body = '';
+
+        //Read the data
+        response.on('data', function(chunk) {
+            body += chunk;
+        });
+
+        // Print out the data once we have received all of it
+        response.on('end', function() {
+            if (response.statusCode === 200) {
+                try {
+
+                    // Parse the XML to get the pieces we need
+                    parseXML(body, function(err, result) {
+
+                        // Get the city
+                        var city = result.weatherdata.location[0].name[0];
+                        
+                        // Get forecast data
+                        var forecast = result.weatherdata.forecast[0].time;
+                        var numEntries = forecast.length;
+                        var numEntries = Math.min(numEntries, 4);
+                        var weather = [];
+                        var datetime;
+                        for (var i = 0; i < numEntries; i++) {
+                            datetime = new Date(forecast[i].$.to);
+                            weather.push({
+                                time : convertTime(datetime),
+                                temp : forecast[i].temperature[0].$.value,
+                                windSp : forecast[i].windSpeed[0].$.mps,
+                                windDir : forecast[i].windDirection[0].$.code
+                            });
+                        }
+                        
+                        // Find units
+                        var tempUnits = "C";
+                        var speedUnits = "m/s";
+                        if (UNITS === "imperial") {
+                            tempUnits = "F";
+                            speedUnits = "mph";
+                        }
+
+                        // Print the information for debugging
+                        if (DEBUG >= 2) {
+                            console.log(city);
+                            for (i = 0; i < numEntries; i++) {
+                                console.log(weather[i]);
+                            }
+                        }
+                        
+                        // Construct the string to display
+                        forecastStr = city;
+                        for (i = 0; i < numEntries; i++) {
+                            forecastStr += "\n\n";
+                            forecastStr += weather[i].time + " ";
+                            forecastStr += weather[i].temp + tempUnits + "\n";
+                            forecastStr += "Wind: ";
+                            forecastStr += weather[i].windSp + speedUnits;
+                            forecastStr += " " + weather[i].windDir;
+                        }
+                        console.log(forecastStr);
+
+                        // Update the LCD with current weather
+                        updateLCD(forecastStr);
+                    });
+                } catch(error) {
+
+                    // Report problem with parsing the JSON
+                    console.log("Parsing error: " + error);
+                }
+            } else {
+
+                // Report problem with the response
+                console.log("Response error: " +
+                            http.STATUS_CODES[response.statusCode]);
+            }
+        })
+    });
+
+    // Report a problem with the connection
+    request.on('error', function (err) {
+        console.log("Connection error: " + err);
+    });
+}
+
 // Start getting weather data
 function updateWeather() {
-    weatherThread = setInterval(function() {
-        getWeather();
-    }, WAIT_WEATHER);
+
+    // If there is an existing timeout thread, clear it
+    if (weatherThread !== null) {
+        clearTimeout(weatherThread);
+    }
+    
+    // Find the weather
+    switch(state) {
+        case STATE_CURRENT:
+            if (DEBUG >= 1) {
+                console.log("Getting current weather");
+            }
+            getWeather();
+            break;
+        case STATE_HOURLY:
+            if (DEBUG >= 1) {
+                console.log("Getting hourly forecast");
+            }
+            getHourly();
+            break;
+        case STATE_DAILY:
+            if (DEBUG >= 1) {
+                console.log("Getting 3 day forecast");
+            }
+            break;
+        default:
+            break;
+    }
+    
+    // Call this function again      
+    weatherThread = setTimeout(updateWeather, WAIT_WEATHER);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -361,11 +446,18 @@ if (!gs.init()) {
     process.exit(1);
 }
 
-// Enable light sensor without interrupts
-if (!gs.enableLightSensor(false)) {
-    console.log("Error enabling light sensor");
-    process.exit(1);
+// Enable gesture sensor without interrupts
+if (gs.enableGestureSensor(false)) {
+    if (DEBUG >= 1) {
+        console.log("Gesture sensor is running");
+    }
+} else {
+    console.log("Error enabling gesture sensor");
 }
 
-// Clear LCD and wait for light
-waitForLight();
+// Clear LCD and wait for light. Start polling weather.
+if (DEBUG === 0) {
+    lcd.fillScreen(ili9341.ILI9341_BLACK);
+}
+updateWeather();
+checkGesture();
