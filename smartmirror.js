@@ -55,16 +55,16 @@ var ili9341 = require('jsupm_ili9341');
 var apds9960 = require('jsupm_apds9960');
 
 // Parameters
-var DEBUG = 1;
+var DEBUG = 0;
 var OPENWEATHER_API_KEY = "74437411d57c5685298a96fe01ea98a8";
 var LATITUDE = 40.015;
 var LONGITUDE = -105.27;
 var UNITS = "imperial";
 var TEXT_COLOR = ili9341.ILI9341_BLUE;
-var LIGHT_THRESHOLD_HIGH = 100; // Amount of light needed to start LCD
-var LIGHT_THRESHOLD_LOW = 10;   // Amount of light needed to go to "sleep"
-var WAIT_WEATHER = 10000;       // Amount of time (ms) between weather updates
-var WAIT_GESTURE = 250;         // Amount of time (ms) between gesture updates
+var LIGHT_THRESHOLD_HIGH = 2000;// Amount of light needed to start LCD
+var LIGHT_THRESHOLD_LOW = 1500; // Amount of light needed to go to "sleep"
+var WAIT_WEATHER = 20000;       // Amount of time (ms) between weather updates
+var WAIT_GESTURE = 200;         // Amount of time (ms) between gesture updates
 var STATE_CURRENT = 0;          // Looking for current weather
 var STATE_HOURLY = 1;           // Get hourly forecast
 var STATE_DAILY = 2;            // Get 3 day forecast
@@ -86,6 +86,9 @@ var weatherThread = null;
 // Current string on LCD (used for fast erasing)
 var lcdTime = null;
 var lcdString = null;
+
+// Display weather data or not
+var display = false;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -110,37 +113,89 @@ function convertTime(datetime) {
 }
 
 // Look for a gesture
-function checkGesture() {
+function checkLightAndGesture() {
 
     // Check for no light and new gestures
     sensorThread = setInterval(function() {
+    
+        // Check light sensor
+        var light = gs.readAmbientLight();
+        if (DEBUG >= 2) {
+            console.log("Light: " + light);
+        }
+        if ((display === false) && (light >= LIGHT_THRESHOLD_HIGH)) {
+            if (DEBUG >= 1) {
+                console.log("Lights on. Finding weather.");
+            }
+            display = true;
+            updateWeather();
+        } else if ((display === true) && (light <= LIGHT_THRESHOLD_LOW)) {
+            if (DEBUG >= 1) {
+                console.log("Lights off. Goodbye.");
+            }
+            display = false;
+            state = STATE_CURRENT;
+            clearTime();
+            clearString();
+            lcdTime = null;
+            lcdString = null;
+        }
 
         // Check for gestures and update state if gesture found
-        if (gs.isGestureAvailable()) {
-            switch(gs.readGesture()) {
-                case apds9960.DIR_LEFT:
-                    state = (state + 5) % 3;
-                    if (DEBUG >= 1) {
-                        console.log("LEFT gesture. Now state " + state);
-                    }
-                    updateWeather();
-                    break;
-                case apds9960.DIR_RIGHT:
-                    state = (state + 1) % 3;
-                    if (DEBUG >= 1) {
-                        console.log("RIGHT gesture. Now state " + state);
-                    }
-                    updateWeather();
-                    break;
-                default:
-                    break;
+        if (display) {
+            if (gs.isGestureAvailable()) {
+                switch(gs.readGesture()) {
+                    case apds9960.DIR_LEFT:
+                        state = (state + 3) % 2;
+                        if (DEBUG >= 1) {
+                            console.log("LEFT gesture. Now state " + state);
+                        }
+                        updateWeather();
+                        break;
+                    case apds9960.DIR_RIGHT:
+                        state = (state + 1) % 2;
+                        if (DEBUG >= 1) {
+                            console.log("RIGHT gesture. Now state " + state);
+                        }
+                        updateWeather();
+                        break;
+                    default:
+                        break;
+                }
             }
         }
     }, WAIT_GESTURE);
 }
 
+// Clear time from LCD
+function clearTime() {
+    lcd.setCursor(0, 10);
+    lcd.setTextSize(4);
+    lcd.setTextColor(ili9341.ILI9341_BLACK);
+    if (DEBUG >= 2) {
+        console.log("LCD: Clearing time");
+    }
+    lcd.print(lcdTime);
+}
+
+// Clear string from LCD
+function clearString() {
+    lcd.setCursor(0, 50);
+    lcd.setTextSize(2);
+    lcd.setTextColor(ili9341.ILI9341_BLACK);
+    lcd.print(lcdString);
+    if (DEBUG >= 2) {
+        console.log("LCD: Clearing string");
+    }
+}
+
 // Update LCD with time and a string
 function updateLCD(str) {
+
+    // Make sure we are supposed to display something
+    if (display === false) {
+        return;
+    }
     
     // Get time
     timeStr = convertTime(new Date());
@@ -151,20 +206,15 @@ function updateLCD(str) {
         // Configure text parameters
         lcd.setCursor(0, 10);
         lcd.setTextWrap(false);
-        lcd.setTextSize(4);
         
         // Erase previous time
         if (lcdTime !== null) {
-            lcd.setCursor(0, 10);
-            lcd.setTextColor(ili9341.ILI9341_BLACK);
-            if (DEBUG >= 2) {
-                console.log("LCD: Clearing time");
-            }
-            lcd.print(lcdTime);
+            clearTime();
         }
     
         // Write new time
         lcd.setCursor(0, 10);
+        lcd.setTextSize(4);
         if (DEBUG >= 2) {
             console.log("LCD: Writing time");
         }
@@ -176,18 +226,13 @@ function updateLCD(str) {
     if (str !== lcdString) {
         
         // Erase previous text
-        lcd.setTextSize(2)
         if (lcdString !== null) {
-            lcd.setCursor(0, 50);
-            lcd.setTextColor(ili9341.ILI9341_BLACK);
-            lcd.print(lcdString);
-            if (DEBUG >= 2) {
-                console.log("LCD: Clearing string");
-            }
+            clearString();
         }
     
         // Write new text
         lcd.setCursor(0, 50);
+        lcd.setTextSize(2);
         if (DEBUG >= 2) {
             console.log("LCD: Writing string");
         }
@@ -340,12 +385,16 @@ function getHourly() {
                         var numEntries = Math.min(numEntries, 4);
                         var weather = [];
                         var datetime;
+                        var temperature;
+                        var windSpeed;
                         for (var i = 0; i < numEntries; i++) {
                             datetime = new Date(forecast[i].$.to);
+                            temperature = forecast[i].temperature[0].$.value;
+                            windSpeed = forecast[i].windSpeed[0].$.mps;
                             weather.push({
                                 time : convertTime(datetime),
-                                temp : forecast[i].temperature[0].$.value,
-                                windSp : forecast[i].windSpeed[0].$.mps,
+                                temp : Math.round(temperature * 10) / 10,
+                                windSp : Math.round(windSpeed * 10) / 10,
                                 windDir : forecast[i].windDirection[0].$.code
                             });
                         }
@@ -376,7 +425,6 @@ function getHourly() {
                             forecastStr += weather[i].windSp + speedUnits;
                             forecastStr += " " + weather[i].windDir;
                         }
-                        console.log(forecastStr);
 
                         // Update the LCD with current weather
                         updateLCD(forecastStr);
@@ -409,27 +457,24 @@ function updateWeather() {
         clearTimeout(weatherThread);
     }
     
-    // Find the weather
-    switch(state) {
-        case STATE_CURRENT:
-            if (DEBUG >= 1) {
-                console.log("Getting current weather");
-            }
-            getWeather();
-            break;
-        case STATE_HOURLY:
-            if (DEBUG >= 1) {
-                console.log("Getting hourly forecast");
-            }
-            getHourly();
-            break;
-        case STATE_DAILY:
-            if (DEBUG >= 1) {
-                console.log("Getting 3 day forecast");
-            }
-            break;
-        default:
-            break;
+    // Find the weather (only if display is on)
+    if (display) {
+        switch(state) {
+            case STATE_CURRENT:
+                if (DEBUG >= 1) {
+                    console.log("Getting current weather");
+                }
+                getWeather();
+                break;
+            case STATE_HOURLY:
+                if (DEBUG >= 1) {
+                    console.log("Getting hourly forecast");
+                }
+                getHourly();
+                break;
+            default:
+                break;
+        }
     }
     
     // Call this function again      
@@ -446,6 +491,15 @@ if (!gs.init()) {
     process.exit(1);
 }
 
+// Enable light sensor without interrupts
+if (gs.enableLightSensor(false)) {
+    if (DEBUG >= 1) {
+        console.log("Light sensor is running");
+    }
+} else {
+    console.log("Error enabling light sensor");
+}
+
 // Enable gesture sensor without interrupts
 if (gs.enableGestureSensor(false)) {
     if (DEBUG >= 1) {
@@ -460,4 +514,4 @@ if (DEBUG === 0) {
     lcd.fillScreen(ili9341.ILI9341_BLACK);
 }
 updateWeather();
-checkGesture();
+checkLightAndGesture();
